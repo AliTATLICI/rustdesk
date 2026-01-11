@@ -1,0 +1,84 @@
+name: Custom Windows Build Only
+
+on:
+  workflow_dispatch: # Manuel başlatma butonu ekler
+
+env:
+  # Orijinal dosyanızdaki kritik versiyon sabitleri
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VERSION: "1.4.5"
+
+jobs:
+  # RustDesk'in ihtiyaç duyduğu ön hazırlık adımları
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build-RustDeskTempTopMostWindow:
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  build-windows:
+    name: Windows x64 Build
+    needs: [build-RustDeskTempTopMostWindow, generate-bridge]
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # AYARLARINIZIN ENJEKTE EDİLDİĞİ KRİTİK ADIM
+      - name: Inject Custom Config
+        shell: pwsh
+        run: |
+          $configFile = "libs/hbb_common/src/config.rs"
+          if (Test-Path $configFile) {
+              $content = Get-Content $configFile
+              $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];', 'pub const RENDEZVOUS_SERVERS: &[&str] = &["bidbdestek.isparta.edu.tr"];'
+              $content = $content -replace 'pub const RS_PUB_KEY: &str = ".*";', 'pub const RS_PUB_KEY: &str = "hHkhdSgWtSXSc52oJ2QsREZV5zwJe4FDEfGQyxrIaPA=";'
+              $content | Set-Content $configFile
+              Write-Host "Config injected into $configFile"
+          }
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "15.0.6"
+
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Build rustdesk
+        shell: pwsh
+        run: |
+          # Orijinal build komutunuz
+          python3 .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
+          mv ./flutter/build/windows/x64/runner/Release ./rustdesk-output
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustDesk-Custom-Windows
+          path: rustdesk-output/rustdesk.exe
